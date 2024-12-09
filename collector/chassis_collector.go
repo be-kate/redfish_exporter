@@ -24,6 +24,7 @@ var (
 	ChassisNetworkAdapterLabelNames   = []string{"resource", "chassis_id", "network_adapter", "network_adapter_id"}
 	ChassisNetworkPortLabelNames      = []string{"resource", "chassis_id", "network_adapter", "network_adapter_id", "network_port", "network_port_id", "network_port_type", "network_port_speed", "network_port_connectiont_type", "network_physical_port_number"}
 	ChassisPhysicalSecurityLabelNames = []string{"resource", "chassis_id", "intrusion_sensor_number", "intrusion_sensor_rearm"}
+	ChassisPowerSupplyRedundancyLabelNames = []string{"resource", "chassis_id", "power_supply", "redundancy_id"}
 
 	ChassisLogServiceLabelNames = []string{"chassis_id", "log_service", "log_service_id", "log_service_enabled", "log_service_overwrite_policy"}
 	ChassisLogEntryLabelNames   = []string{"chassis_id", "log_service", "log_service_id", "log_entry", "log_entry_id", "log_entry_code", "log_entry_type", "log_entry_message_id", "log_entry_sensor_number", "log_entry_sensor_type"}
@@ -73,6 +74,8 @@ func createChassisMetricMap() map[string]Metric {
 	addToMetricMap(chassisMetrics, ChassisSubsystem, "power_powersupply_power_input_watts", "measured input power, in Watts, of powersupply on this chassis", ChassisPowerSupplyLabelNames)
 	addToMetricMap(chassisMetrics, ChassisSubsystem, "power_powersupply_power_output_watts", "measured output power, in Watts, of powersupply on this chassis", ChassisPowerSupplyLabelNames)
 	addToMetricMap(chassisMetrics, ChassisSubsystem, "power_powersupply_power_capacity_watts", "power_capacity_watts of powersupply on this chassis", ChassisPowerSupplyLabelNames)
+	addToMetricMap(chassisMetrics, ChassisSubsystem, "power_powersupply_redundancy_state", fmt.Sprintf("powersupply redundancy state of chassis component,%s", CommonStateHelp), ChassisPowerSupplyRedundancyLabelNames)
+	addToMetricMap(chassisMetrics, ChassisSubsystem, "power_powersupply_redundancy_health", fmt.Sprintf("powersupply redundancy health of chassis component,%s", CommonHealthHelp), ChassisPowerSupplyRedundancyLabelNames)
 
 	addToMetricMap(chassisMetrics, ChassisSubsystem, "network_adapter_state", fmt.Sprintf("chassis network adapter state,%s", CommonStateHelp), ChassisNetworkAdapterLabelNames)
 	addToMetricMap(chassisMetrics, ChassisSubsystem, "network_adapter_health_state", fmt.Sprintf("chassis network adapter health state,%s", CommonHealthHelp), ChassisNetworkAdapterLabelNames)
@@ -204,6 +207,18 @@ func (c *ChassisCollector) Collect(ch chan<- prometheus.Metric) {
 				wg5.Add(len(chassisPowerInfoPowerSupplies))
 				for _, chassisPowerInfoPowerSupply := range chassisPowerInfoPowerSupplies {
 					go parseChassisPowerInfoPowerSupply(ch, chassisID, chassisPowerInfoPowerSupply, wg5)
+				}
+
+				// powerRedundancy
+				chassisPowerInfoPowerRedundancies := chassisPowerInfo.Redundancy
+				if chassisPowerInfoPowerRedundancies != nil {
+					wg6 := &sync.WaitGroup{}
+					wg6.Add(len(chassisPowerInfoPowerRedundancies))
+					for _, chassisPowerInfoPowerRedundancy := range chassisPowerInfoPowerRedundancies {
+						go parseChassisPowerInfoPowerRedundancy(ch, chassisID, chassisPowerInfoPowerRedundancy, wg6)
+					}
+				} else if chassisPowerInfoPowerRedundancies == nil {
+					chassisLogContext.WithField("operation", "chassis.Power().chassisPowerInfo.Redundancy").Info("no power redundancy data found")
 				}
 			}
 
@@ -430,5 +445,18 @@ func parseNetworkPort(ch chan<- prometheus.Metric, chassisID string, networkPort
 	}
 	if networkPortHealthStateValue, ok := parseCommonStatusHealth(networkPortHealthState); ok {
 		ch <- prometheus.MustNewConstMetric(chassisMetrics["chassis_network_port_health_state"].desc, prometheus.GaugeValue, networkPortHealthStateValue, chassisNetworkPortLabelValues...)
+	}
+}
+
+func parseChassisPowerInfoPowerRedundancy(ch chan<- prometheus.Metric, chassisID string, chassisPowerInfoPowerRedundancy redfish.Redundancy, wg *sync.WaitGroup) {
+	defer wg.Done()
+	chassisPowerInfoPowerSupplyRedundancyStatus := chassisPowerInfoPowerRedundancy
+	ChassisPowerSupplyRedundancyLabelvalues := []string{"power_supply", chassisID, chassisPowerInfoPowerRedundancy.Name, string(chassisPowerInfoPowerRedundancy.MemberID)}
+
+	if chassisPowerInfoPowerSupplyRedundancyStateValue, ok := parseCommonStatusState(chassisPowerInfoPowerSupplyRedundancyStatus.Status.State); ok {
+		ch <- prometheus.MustNewConstMetric(chassisMetrics["chassis_power_powersupply_redundancy_state"].desc, prometheus.GaugeValue, chassisPowerInfoPowerSupplyRedundancyStateValue, ChassisPowerSupplyRedundancyLabelvalues...)
+	}
+	if chassisPowerInfoPowerSupplyRedundancyHealthValue, ok := parseCommonStatusHealth(chassisPowerInfoPowerSupplyRedundancyStatus.Status.Health); ok {
+		ch <- prometheus.MustNewConstMetric(chassisMetrics["chassis_power_powersupply_redundancy_health"].desc, prometheus.GaugeValue, chassisPowerInfoPowerSupplyRedundancyHealthValue, ChassisPowerSupplyRedundancyLabelvalues...)
 	}
 }
